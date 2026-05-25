@@ -7,11 +7,11 @@ A cuckoo filter implementation in Go — a probabilistic data structure for set 
 A cuckoo filter answers "is this item in the set?" with a configurable false-positive rate and zero false negatives. Unlike Bloom filters, cuckoo filters support **deletion** of items.
 
 This implementation uses:
-- 8-bit fingerprints (4 per bucket)
+- 16-bit fingerprints (4 per bucket)
 - [xxhash v2](https://github.com/cespare/xxhash) for hashing
 - MurmurHash2's multiply constant for the alternate-index calculation
 
-False positive rate is ~3% or below at full capacity.
+False positive rate is ~0.012% or below at full capacity.
 
 ## Installation
 

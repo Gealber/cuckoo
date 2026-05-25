@@ -102,9 +102,9 @@ func TestFalsePositiveRate(t *testing.T) {
 	}
 
 	fpr := float64(falsePositives) / total
-	// 8-bit fingerprints with b=4: upper bound ~3%
-	if fpr > 0.03 {
-		t.Errorf("false positive rate %.4f exceeds 3%% threshold", fpr)
+	// 16-bit fingerprints with b=4: upper bound ~0.012%
+	if fpr > 0.001 {
+		t.Errorf("false positive rate %.4f exceeds 0.1%% threshold", fpr)
 	}
 	t.Logf("false positive rate: %.4f (%d/%d)", fpr, falsePositives, total)
 }

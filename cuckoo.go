@@ -13,7 +13,7 @@ const (
 	murmurHash2c = uint32(0x5bd1e995) // multiply constant from MurmurHash2
 )
 
-type fingerprint = uint8
+type fingerprint = uint16
 
 type bucket [bucketSize]fingerprint
 
@@ -42,7 +42,7 @@ func (cf *Filter) hashOf(key []byte) (uint, fingerprint) {
 	h := xxhash.Sum64(key)
 	// Top byte -> fingerprint, bottom bits -> bucket index.
 	// Using opposite ends of the same hash avoids correlation between the two.
-	f := fingerprint(h >> 56)
+	f := fingerprint(h >> 48)
 	if f == 0 {
 		f = 1
 	}
