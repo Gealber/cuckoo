@@ -1,15 +1,23 @@
 # cuckoo
 
-A cuckoo filter implementation in Go — a probabilistic data structure for set membership testing that supports deletion.
+A Go implementation of a cuckoo filter — a probabilistic data structure for set
+membership testing that supports deletion. This implementation is a port of the
+[Rust cuckoo filter](https://github.com/rpcpool/yellowstone-grpc/tree/master/yellowstone-grpc-proto/src/cuckoo)
+from [yellowstone-grpc](https://github.com/rpcpool/yellowstone-grpc), and is
+wire-compatible with it.
 
 ## Overview
 
-A cuckoo filter answers "is this item in the set?" with a configurable false-positive rate and zero false negatives. Unlike Bloom filters, cuckoo filters support **deletion** of items.
+A cuckoo filter answers "is this item in the set?" with a configurable
+false-positive rate and zero false negatives. Unlike Bloom filters, cuckoo
+filters support **deletion** of items.
 
-This implementation uses:
-- 16-bit fingerprints (4 per bucket)
-- [xxhash v2](https://github.com/cespare/xxhash) for hashing
-- MurmurHash2's multiply constant for the alternate-index calculation
+Both this implementation and the Rust original use:
+- 16-bit fingerprints, 4 slots per bucket
+- [SipHash-2-4](https://131002.net/siphash/) with seed-derived keys: `k0 = seed`, `k1 = seed.rotate_left(32)`
+- Default seed `0x796c6c77_7374_6e21` ("yllwstn!")
+- 95% load factor target, bucket count rounded up to the next power of 2
+- Up to 500 cuckoo kicks before declaring the table full
 
 False positive rate is ~0.012% or below at full capacity.
 
@@ -24,7 +32,7 @@ go get github.com/Gealber/cuckoo
 ```go
 import "github.com/Gealber/cuckoo"
 
-cf := cuckoo.New(10_000) // capacity hint
+cf := cuckoo.New(10_000) // capacity hint, uses DefaultSeed
 
 cf.Insert([]byte("hello"))
 
@@ -42,23 +50,64 @@ cf.Count() // number of items currently in the filter
 | Method | Description |
 |---|---|
 | `New(capacity uint) *Filter` | Create a filter sized for approximately `capacity` items |
+| `NewWithSeed(capacity uint, seed uint64) *Filter` | Create a filter with an explicit SipHash seed |
 | `Insert(key []byte) bool` | Insert a key; returns `false` if the table is full |
 | `Lookup(key []byte) bool` | Test membership; may return false positives |
 | `Delete(key []byte) bool` | Remove a key; returns `false` if not found |
 | `Count() uint` | Number of items currently stored |
+| `Seed() uint64` | Return the SipHash seed (needed for serialization) |
+| `Bytes() []byte` | Serialize buckets as little-endian u16 values |
+| `FromBytes(data []byte, seed uint64) (*Filter, error)` | Deserialize from raw bucket bytes and seed |
+
+## Wire compatibility with Rust
+
+A filter built in Rust and serialized to the `CuckooFilter` proto message can
+be deserialized and queried directly in Go:
+
+```go
+// proto is a deserialized CuckooFilter protobuf message from yellowstone-grpc
+cf, err := cuckoo.FromBytes(proto.Data, proto.HashSeed)
+if err != nil {
+    // handle
+}
+
+cf.Lookup(pubkey[:]) // true if pubkey was in the Rust filter
+```
+
+The Rust proto wire format maps to Go as follows:
+
+| Proto field | Go equivalent |
+|---|---|
+| `data` | raw bytes passed to `FromBytes` |
+| `hash_seed` | seed passed to `FromBytes` / returned by `Seed()` |
+| `bucket_count` | `len(cf.Bytes()) / 8` |
+| `entries_per_bucket` | always 4 |
+| `fingerprint_bits` | always 16 |
+
+> **Key encoding:** Rust's `Hash` trait for `[u8; N]` prepends the slice length
+> as a little-endian u64 before the bytes. This library replicates that encoding,
+> so a 32-byte Solana pubkey `pk` must be passed as `pk[:]`.
+
+Cross-language compatibility is verified by `TestCrossCompatVectors` and
+`TestCrossCompatSingleInsert` in `cuckoo_test.go`, with a companion Rust test
+in `compat_rust_test.rs` that asserts identical hash values and byte layouts.
 
 ## Benchmarks
 
-Run on an Intel Core Ultra 7 255U:
+Run on an Intel Core Ultra 7 255U (SipHash-2-4, all operations allocation-free):
 
 ```
-BenchmarkInsert-14        29681710    252.6 ns/op    0 B/op    0 allocs/op
-BenchmarkLookupHit-14     56597416    139.4 ns/op    0 B/op    0 allocs/op
-BenchmarkLookupMiss-14   100000000    155.5 ns/op    0 B/op    0 allocs/op
-BenchmarkDelete-14        56801613    124.6 ns/op    0 B/op    0 allocs/op
+BenchmarkInsert-14        22589847    483 ns/op    0 B/op    0 allocs/op
+BenchmarkLookupHit-14     33781297    485 ns/op    0 B/op    0 allocs/op
+BenchmarkLookupMiss-14    26480258    550 ns/op    0 B/op    0 allocs/op
+BenchmarkDelete-14        30668930    499 ns/op    0 B/op    0 allocs/op
 ```
 
-All operations are allocation-free after the initial filter creation.
+> **Note:** Performance is not the primary goal of this library. The hash
+> function (SipHash-2-4), key encoding, and alternate-index formula are all
+> chosen to match the Rust implementation exactly, not to maximise throughput.
+> A Go-only filter using xxhash would be roughly 2× faster, but would not be
+> wire-compatible with yellowstone-grpc.
 
 To run benchmarks yourself:
 
