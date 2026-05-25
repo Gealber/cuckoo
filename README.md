@@ -50,14 +50,22 @@ cf.Count() // number of items currently in the filter
 | Method | Description |
 |---|---|
 | `New(capacity uint) *Filter` | Create a filter sized for approximately `capacity` items |
-| `NewWithSeed(capacity uint, seed uint64) *Filter` | Create a filter with an explicit SipHash seed |
+| `NewWithSeed(capacity uint, seed uint64) *Filter` | Create a filter with an explicit seed, using SipHash |
+| `NewWithOptions(capacity uint, seed uint64, algo HashAlgorithm) *Filter` | Create a filter with an explicit seed and hash algorithm |
 | `Insert(key []byte) bool` | Insert a key; returns `false` if the table is full |
 | `Lookup(key []byte) bool` | Test membership; may return false positives |
 | `Delete(key []byte) bool` | Remove a key; returns `false` if not found |
 | `Count() uint` | Number of items currently stored |
-| `Seed() uint64` | Return the SipHash seed (needed for serialization) |
+| `Seed() uint64` | Return the hash seed (needed for serialization) |
+| `Algorithm() HashAlgorithm` | Return the hash algorithm (needed for serialization) |
 | `Bytes() []byte` | Serialize buckets as little-endian u16 values |
-| `FromBytes(data []byte, seed uint64) (*Filter, error)` | Deserialize from raw bucket bytes and seed |
+| `FromBytes(data []byte, seed uint64, algo HashAlgorithm) (*Filter, error)` | Deserialize from raw bucket bytes, seed, and hash algorithm |
+
+### Hash algorithms
+
+| Constant | Value | Description |
+|---|---|---|
+| `SipHash` | `0` | SipHash-2-4 — default, wire-compatible with yellowstone-grpc |
 
 ## Wire compatibility with Rust
 

@@ -130,7 +130,7 @@ func TestFromBytesRoundTrip(t *testing.T) {
 
 	data := cf.Bytes()
 
-	cf2, err := FromBytes(data, cf.Seed())
+	cf2, err := FromBytes(data, cf.Seed(), cf.Algorithm())
 	if err != nil {
 		t.Fatalf("FromBytes: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestFromBytesRoundTrip(t *testing.T) {
 }
 
 func TestFromBytesUnaligned(t *testing.T) {
-	_, err := FromBytes([]byte{1, 2, 3}, DefaultSeed)
+	_, err := FromBytes([]byte{1, 2, 3}, DefaultSeed, SipHash)
 	if err == nil {
 		t.Error("FromBytes with unaligned data: want error, got nil")
 	}

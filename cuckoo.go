@@ -3,6 +3,7 @@ package cuckoo
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"math/bits"
 	"math/rand"
@@ -23,6 +24,14 @@ const (
 	DefaultSeed = uint64(0x796c6c77_7374_6e21)
 )
 
+// HashAlgorithm identifies the hash function used by a filter.
+// The zero value (SipHash) is the default and matches the Rust yellowstone-grpc implementation.
+type HashAlgorithm uint8
+
+const (
+	SipHash HashAlgorithm = iota
+)
+
 type fingerprint = uint16
 
 type bucket [bucketSize]fingerprint
@@ -31,23 +40,30 @@ type bucket [bucketSize]fingerprint
 type Filter struct {
 	buckets []bucket
 	count   uint
-	m       uint   // number of buckets, always a power of 2
-	seed    uint64 // SipHash-2-4 seed
+	m       uint          // number of buckets, always a power of 2
+	seed    uint64        // hash seed
+	algo    HashAlgorithm // hash algorithm
 }
 
-// New creates a filter sized for approximately capacity items using DefaultSeed.
+// New creates a filter sized for approximately capacity items using DefaultSeed and SipHash.
 func New(capacity uint) *Filter {
-	return NewWithSeed(capacity, DefaultSeed)
+	return NewWithOptions(capacity, DefaultSeed, SipHash)
 }
 
-// NewWithSeed creates a filter with an explicit SipHash-2-4 seed.
+// NewWithSeed creates a filter with an explicit seed, using SipHash.
 func NewWithSeed(capacity uint, seed uint64) *Filter {
+	return NewWithOptions(capacity, seed, SipHash)
+}
+
+// NewWithOptions creates a filter with an explicit seed and hash algorithm.
+func NewWithOptions(capacity uint, seed uint64, algo HashAlgorithm) *Filter {
 	m := numBuckets(capacity)
 
 	return &Filter{
 		buckets: make([]bucket, m),
 		m:       m,
 		seed:    seed,
+		algo:    algo,
 	}
 }
 
@@ -76,41 +92,44 @@ func (cf *Filter) sipKeys() (uint64, uint64) {
 }
 
 // hashOf returns the primary bucket index and fingerprint for key.
-//
-// Matches Rust's Hash trait for [u8]: feeds len(key) as little-endian u64
-// followed by the raw bytes, mirroring how Rust's [T].hash() prepends the
-// slice length before its elements.
 func (cf *Filter) hashOf(key []byte) (uint, fingerprint) {
-	k0, k1 := cf.sipKeys()
+	switch cf.algo {
+	case SipHash:
+		k0, k1 := cf.sipKeys()
 
-	buf := make([]byte, 8+len(key))
-	binary.LittleEndian.PutUint64(buf[:8], uint64(len(key)))
-	copy(buf[8:], key)
+		buf := make([]byte, 8+len(key))
+		binary.LittleEndian.PutUint64(buf[:8], uint64(len(key)))
+		copy(buf[8:], key)
 
-	h := siphash.Hash(k0, k1, buf)
+		h := siphash.Hash(k0, k1, buf)
 
-	f := fingerprint(h >> 32)
-	if f == 0 {
-		f = 1
+		f := fingerprint(h >> 32)
+		if f == 0 {
+			f = 1
+		}
+
+		return uint(h) & (cf.m - 1), f
+	default:
+		panic(fmt.Sprintf("cuckoo: unsupported hash algorithm %d", cf.algo))
 	}
-
-	return uint(h) & (cf.m - 1), f
 }
 
 // altIndex returns the alternate bucket index for (i, f).
 // Satisfies altIndex(altIndex(i, f), f) == i.
-//
-// Matches Rust: i ^ index(hash(&fp)), where fp is fed to SipHash as 2 bytes LE,
-// mirroring how Rust's u16.hash() calls write_u16 (native/little-endian bytes).
 func (cf *Filter) altIndex(i uint, f fingerprint) uint {
-	k0, k1 := cf.sipKeys()
+	switch cf.algo {
+	case SipHash:
+		k0, k1 := cf.sipKeys()
 
-	var fpBuf [2]byte
-	binary.LittleEndian.PutUint16(fpBuf[:], uint16(f))
+		var fpBuf [2]byte
+		binary.LittleEndian.PutUint16(fpBuf[:], uint16(f))
 
-	h := siphash.Hash(k0, k1, fpBuf[:])
+		h := siphash.Hash(k0, k1, fpBuf[:])
 
-	return i ^ (uint(h) & (cf.m - 1))
+		return i ^ (uint(h) & (cf.m - 1))
+	default:
+		panic(fmt.Sprintf("cuckoo: unsupported hash algorithm %d", cf.algo))
+	}
 }
 
 
@@ -200,9 +219,12 @@ func (cf *Filter) Delete(key []byte) bool {
 
 func (cf *Filter) Count() uint { return cf.count }
 
-// Seed returns the SipHash-2-4 seed. Include this in any serialized form so
+// Seed returns the hash seed. Include this in any serialized form so
 // the receiver can reconstruct a matching hasher (mirrors Rust's proto hash_seed field).
 func (cf *Filter) Seed() uint64 { return cf.seed }
+
+// Algorithm returns the hash algorithm used by this filter.
+func (cf *Filter) Algorithm() HashAlgorithm { return cf.algo }
 
 
 // Bytes serializes the filter's buckets as little-endian u16 values,
@@ -219,9 +241,9 @@ func (cf *Filter) Bytes() []byte {
 	return data
 }
 
-// FromBytes deserializes a filter from raw bucket bytes and a SipHash seed,
-// matching the Rust proto wire format (data + hash_seed fields).
-func FromBytes(data []byte, seed uint64) (*Filter, error) {
+// FromBytes deserializes a filter from raw bucket bytes, a seed, and the hash algorithm
+// used when the filter was built. Matches the Rust proto wire format (data + hash_seed + hash_algorithm).
+func FromBytes(data []byte, seed uint64, algo HashAlgorithm) (*Filter, error) {
 	const bytesPerBucket = bucketSize * 2
 
 	if len(data)%bytesPerBucket != 0 {
@@ -245,5 +267,6 @@ func FromBytes(data []byte, seed uint64) (*Filter, error) {
 		buckets: buckets,
 		m:       uint(numBucks),
 		seed:    seed,
+		algo:    algo,
 	}, nil
 }
